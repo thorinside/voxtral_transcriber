@@ -9,6 +9,8 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var audioData: Data?
     @Published var audioLevel: Float = 0.0
     @Published var audioChunk: Data? // New property for real-time chunks
+    @Published var chunkTimestamp: Date? // Timestamp for when the chunk was recorded
+    @Published var chunkId: String? // ID of the persisted chunk
     
     private var audioRecorder: AVAudioRecorder?
     private var timer: Timer?
@@ -18,6 +20,9 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private var audioBuffer: [Float] = []
     private var chunkBuffer: [Float] = [] // New buffer for chunks
     private var lastChunkSent: [Float] = [] // Keep track of the last chunk for overlap
+    private var recordingStartTime: Date?
+    private var lastChunkTime: Date?
+    private let transcriptionQueue = TranscriptionQueue.shared
     
     override init() {
         super.init()
@@ -70,10 +75,12 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             return
         }
         
-        // Clear buffers
+        // Clear buffers and reset timing
         audioBuffer.removeAll()
         chunkBuffer.removeAll()
         lastChunkSent.removeAll()
+        recordingStartTime = Date()
+        lastChunkTime = recordingStartTime
         
         // Stop any existing engine
         audioEngine?.stop()
@@ -159,6 +166,11 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             self.stopLevelTimer()
             self.stopChunkTimer() // Stop the chunk timer
             self.audioLevel = 0.0
+        }
+        
+        // Send any remaining chunk data before stopping
+        if !chunkBuffer.isEmpty {
+            sendFinalAudioChunk()
         }
         
         // Convert buffer to audio data and send
@@ -259,6 +271,9 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         
         print("Sending audio chunk with \(chunkBuffer.count) samples")
         
+        // Calculate timestamp for this chunk (when recording of this chunk started)
+        let chunkTimestamp = lastChunkTime ?? Date()
+        
         // Create overlapping chunk by including the end of the previous chunk
         var overlappingChunk = chunkBuffer
         
@@ -276,9 +291,59 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         // Store current chunk as last chunk for next overlap
         lastChunkSent = chunkBuffer
         
-        // Publish the chunk
+        // Update last chunk time for next chunk
+        lastChunkTime = Date()
+        
+        // Calculate estimated duration in seconds
+        let estimatedDuration = Double(overlappingChunk.count) / 44100.0
+        
+        // Enqueue chunk for persistent storage and transcription
+        let serverURL = "http://dev.local:9090/transcribe" // This should come from settings
+        transcriptionQueue.enqueueChunk(
+            audioData: wavData,
+            timestamp: chunkTimestamp,
+            serverURL: serverURL,
+            estimatedDuration: estimatedDuration
+        )
+        
+        // Publish the chunk with its timestamp (for backward compatibility)
         DispatchQueue.main.async {
             self.audioChunk = wavData
+            self.chunkTimestamp = chunkTimestamp
+        }
+        
+        // Clear the chunk buffer
+        chunkBuffer.removeAll()
+    }
+    
+    private func sendFinalAudioChunk() {
+        guard !chunkBuffer.isEmpty else { return }
+        
+        print("Sending final audio chunk with \(chunkBuffer.count) samples")
+        
+        // Calculate timestamp for the final chunk (when recording of this chunk started)
+        let finalChunkTimestamp = lastChunkTime ?? Date()
+        
+        // For the final chunk, we don't need overlap processing as this is the end
+        // Convert chunk buffer to WAV data
+        let wavData = convertFloatBufferToWAV(chunkBuffer)
+        
+        // Calculate estimated duration in seconds
+        let estimatedDuration = Double(chunkBuffer.count) / 44100.0
+        
+        // Enqueue final chunk for persistent storage and transcription
+        let serverURL = "http://dev.local:9090/transcribe" // This should come from settings
+        transcriptionQueue.enqueueChunk(
+            audioData: wavData,
+            timestamp: finalChunkTimestamp,
+            serverURL: serverURL,
+            estimatedDuration: estimatedDuration
+        )
+        
+        // Publish the final chunk with proper timestamp (for backward compatibility)
+        DispatchQueue.main.async {
+            self.audioChunk = wavData
+            self.chunkTimestamp = finalChunkTimestamp
         }
         
         // Clear the chunk buffer

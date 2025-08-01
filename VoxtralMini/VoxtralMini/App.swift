@@ -38,6 +38,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up the app to run in background but still show in dock
         NSApp.setActivationPolicy(.regular)
         
+        // Initialize the transcription queue and audio chunk store
+        _ = TranscriptionQueue.shared
+        _ = AudioChunkStore.shared
+        
         // Ensure the system tray is properly set up
         DispatchQueue.main.async {
             self.systemTrayManager.setupStatusItem()

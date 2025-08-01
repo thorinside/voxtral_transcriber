@@ -101,6 +101,18 @@ class SystemTrayManager: NSObject, ObservableObject {
         
         menu.addItem(NSMenuItem.separator())
         
+        // Show/Open main window
+        let windowActionTitle = (mainWindow == nil || !(mainWindow?.isVisible ?? false)) ? "📱 Open VoxtralMini" : "📱 Show VoxtralMini"
+        let windowItem = NSMenuItem(
+            title: windowActionTitle,
+            action: #selector(showMainWindow),
+            keyEquivalent: "o"
+        )
+        windowItem.target = self
+        menu.addItem(windowItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
         // Start/Stop recording
         let recordActionTitle = isRecordingFromTray ? "⏹️ Stop Recording" : "🎙️ Start Recording"
         let recordItem = NSMenuItem(
@@ -155,9 +167,37 @@ class SystemTrayManager: NSObject, ObservableObject {
         onToggleRecording?()
     }
     
-    
-    
-    
+    @objc private func showMainWindow() {
+        if let window = mainWindow {
+            // Window exists, bring it to front
+            window.makeKeyAndOrderFront(nil)
+            window.center()
+            NSApp.activate(ignoringOtherApps: true)
+            print("Brought existing window to front")
+        } else {
+            // No window reference, try to find any application window
+            let windows = NSApplication.shared.windows
+            let appWindow = windows.first { window in
+                // Filter out windows that are likely status bar windows based on their properties
+                return window.title.isEmpty && window.frame.size.width < 500 && window.frame.size.height < 100 ? false : true
+            }
+            
+            if let window = appWindow {
+                mainWindow = window
+                window.makeKeyAndOrderFront(nil)
+                window.center()
+                NSApp.activate(ignoringOtherApps: true)
+                print("Found and showed application window")
+            } else {
+                // No window found, try to trigger the app's reopen behavior
+                NSApp.delegate?.applicationShouldHandleReopen?(NSApp, hasVisibleWindows: false)
+                print("Triggered app reopen behavior")
+            }
+        }
+        
+        // Update menu to reflect new window state
+        updateMenu()
+    }
     
     @objc private func showSettings() {
         // Use the standard macOS Settings window

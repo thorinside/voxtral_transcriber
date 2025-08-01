@@ -6,12 +6,15 @@ struct ContentView: View {
     @StateObject private var audioRecorder = AudioRecorder()
     @StateObject private var voxtralService = VoxtralService()
     @StateObject private var databaseManager = DatabaseManager.shared
+    @StateObject private var transcriptionQueue = TranscriptionQueue.shared
+    @StateObject private var audioChunkStore = AudioChunkStore.shared
     @State private var isRecording = false
     @State private var transcriptionChunks: [TranscriptionChunk] = []
     @State private var serverURL = "http://dev.local:9090/transcribe"
     @State private var selectedDate: String?
     @State private var selectedTranscription: Transcription?
     @State private var searchQuery = ""
+    @State private var currentTranscriptionId: Int64?
     @EnvironmentObject var systemTrayManager: SystemTrayManager
     
     private var groupedTranscriptions: [String: [Transcription]] {
@@ -137,6 +140,27 @@ struct ContentView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                     .disabled(audioRecorder.permissionDenied)
+                    
+                    // Transcription Queue Status
+                    if transcriptionQueue.queueCount > 0 || transcriptionQueue.isProcessing {
+                        VStack(spacing: 5) {
+                            HStack {
+                                Circle()
+                                    .fill(transcriptionQueue.isProcessing ? Color.blue : Color.orange)
+                                    .frame(width: 8, height: 8)
+                                
+                                Text(transcriptionQueue.isProcessing ? "Processing..." : "Queued: \(transcriptionQueue.queueCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            if audioChunkStore.failedChunks.count > 0 {
+                                Text("Failed: \(audioChunkStore.failedChunks.count)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+                        }
+                    }
                     
                     // Permission Status
                     if audioRecorder.permissionDenied {
@@ -301,6 +325,18 @@ struct ContentView: View {
             systemTrayManager.setupVoxtralService(voxtralService)
             systemTrayManager.setServerURL(serverURL)
             systemTrayManager.setToggleRecordingCallback(toggleRecording)
+            
+            // Set up notification listener for transcription results
+            NotificationCenter.default.addObserver(
+                forName: .chunkTranscribed,
+                object: nil,
+                queue: .main
+            ) { notification in
+                handleTranscriptionResult(notification)
+            }
+            
+            // Clean up old completed chunks on startup
+            audioChunkStore.cleanupCompletedChunks()
         }
         .onChange(of: audioRecorder.audioData) { _, newData in
             if newData != nil && isRecording {
@@ -314,10 +350,10 @@ struct ContentView: View {
             systemTrayManager.setServerURL(newURL)
         }
         .onChange(of: audioRecorder.audioChunk) { _, newChunk in
-            if newChunk != nil && isRecording {
-                // Send audio chunk to transcription service
+            if newChunk != nil {
+                // Send audio chunk to transcription service (including final chunks when stopping)
                 Task {
-                    await sendAudioForTranscription(newChunk!)
+                    await sendAudioForTranscription(newChunk!, timestamp: audioRecorder.chunkTimestamp)
                 }
             }
         }
@@ -335,6 +371,7 @@ struct ContentView: View {
             audioRecorder.startRecording()
             isRecording = true
             transcriptionChunks.removeAll()
+            currentTranscriptionId = nil
             systemTrayManager.updateRecordingState(isRecording: true)
         }
     }
@@ -348,25 +385,89 @@ struct ContentView: View {
         // Calculate duration (from first to last chunk)
         let duration = transcriptionChunks.last?.timestamp.timeIntervalSince(transcriptionChunks.first?.timestamp ?? Date()) ?? 0
         
-        // Save to database
-        _ = databaseManager.saveTranscription(
-            text: fullText,
-            duration: duration,
-            audioFilePath: nil
-        )
+        // Save or update transcription in database
+        if let existingId = currentTranscriptionId {
+            // Update existing transcription
+            _ = databaseManager.updateTranscription(
+                id: existingId,
+                text: fullText,
+                duration: duration,
+                audioFilePath: nil
+            )
+            print("Updated transcription with ID: \(existingId)")
+        } else {
+            // Create new transcription
+            if let newId = databaseManager.saveTranscription(
+                text: fullText,
+                duration: duration,
+                audioFilePath: nil
+            ) {
+                currentTranscriptionId = newId
+                print("Created new transcription with ID: \(newId)")
+            }
+        }
         
-        // Clear current transcription chunks
-        transcriptionChunks.removeAll()
+        // Only clear chunks if we're not currently recording
+        // This allows late transcription results to still be accumulated
+        if !isRecording {
+            // Delay clearing to allow for any remaining transcription results
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                self.transcriptionChunks.removeAll()
+                self.currentTranscriptionId = nil
+            }
+        }
     }
     
-    private func sendAudioForTranscription(_ audioData: Data) async {
+    private func updateExistingTranscription() {
+        // This method handles updating the database when late transcription results arrive
+        guard !transcriptionChunks.isEmpty else { return }
+        
+        // If we have a current transcription ID, update it
+        if let existingId = currentTranscriptionId {
+            let fullText = transcriptionChunks.map { $0.text }.joined(separator: " ")
+            let duration = transcriptionChunks.last?.timestamp.timeIntervalSince(transcriptionChunks.first?.timestamp ?? Date()) ?? 0
+            
+            _ = databaseManager.updateTranscription(
+                id: existingId,
+                text: fullText,
+                duration: duration,
+                audioFilePath: nil
+            )
+            print("Updated existing transcription with ID: \(existingId) with late results")
+        } else {
+            // If we don't have a current ID, try to find the most recent transcription to update
+            // This handles the case where the transcription was already saved and cleared
+            let mostRecentTranscription = databaseManager.transcriptions.first
+            if let recentId = mostRecentTranscription?.id {
+                let fullText = transcriptionChunks.map { $0.text }.joined(separator: " ")
+                let duration = transcriptionChunks.last?.timestamp.timeIntervalSince(transcriptionChunks.first?.timestamp ?? Date()) ?? 0
+                
+                // Apply deduplication between existing text and new chunks
+                let existingText = mostRecentTranscription?.text ?? ""
+                let newChunksText = fullText
+                let combinedText = existingText.isEmpty ? newChunksText : deduplicateText(existingText, newChunksText)
+                let finalText = existingText.isEmpty ? combinedText : (combinedText.isEmpty ? existingText : "\(existingText) \(combinedText)")
+                
+                _ = databaseManager.updateTranscription(
+                    id: recentId,
+                    text: finalText,
+                    duration: duration,
+                    audioFilePath: nil
+                )
+                print("Updated most recent transcription with ID: \(recentId) with late results")
+                currentTranscriptionId = recentId
+            }
+        }
+    }
+    
+    private func sendAudioForTranscription(_ audioData: Data, timestamp: Date? = nil) async {
         print("Sending audio data for transcription. Size: \(audioData.count) bytes")
         do {
             let result = try await voxtralService.transcribe(audioData: audioData, serverURL: serverURL)
             DispatchQueue.main.async {
                 if !result.isEmpty {
                     print("Transcription received: \(result)")
-                    self.addTranscriptionChunk(result)
+                    self.addTranscriptionChunk(result, timestamp: timestamp)
                 } else {
                     print("Received empty transcription result")
                 }
@@ -374,13 +475,14 @@ struct ContentView: View {
         } catch {
             print("Transcription error: \(error)")
             DispatchQueue.main.async {
-                self.addTranscriptionChunk("Error: \(error.localizedDescription)")
+                self.addTranscriptionChunk("Error: \(error.localizedDescription)", timestamp: timestamp)
             }
         }
     }
     
-    private func addTranscriptionChunk(_ text: String) {
-        let newChunk = TranscriptionChunk(text: text, timestamp: Date())
+    private func addTranscriptionChunk(_ text: String, timestamp: Date? = nil) {
+        let chunkTimestamp = timestamp ?? Date()
+        let newChunk = TranscriptionChunk(text: text, timestamp: chunkTimestamp)
         
         // Apply deduplication with the previous chunk
         if let lastChunk = transcriptionChunks.last {
@@ -487,6 +589,44 @@ struct ContentView: View {
             return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
         } else {
             return String(format: "%02d:%02d", minutes, seconds)
+        }
+    }
+    
+    private func handleTranscriptionResult(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let _ = userInfo["chunkId"] as? String,
+              let result = userInfo["result"] as? String,
+              let timestamp = userInfo["timestamp"] as? Date else {
+            return
+        }
+        
+        // Add the transcription result to the live view
+        // This includes chunks that finish processing after recording stops
+        let chunk = TranscriptionChunk(text: result, timestamp: timestamp)
+        addTranscriptionChunkToLiveView(chunk)
+        
+        // If we're not currently recording but have chunks, update the existing transcription
+        // This handles the case where final chunks complete after recording stops
+        if !isRecording && !transcriptionChunks.isEmpty {
+            // Update the existing transcription with the new chunks
+            updateExistingTranscription()
+        }
+    }
+    
+    private func addTranscriptionChunkToLiveView(_ chunk: TranscriptionChunk) {
+        // Apply deduplication with the previous chunk
+        if let lastChunk = transcriptionChunks.last {
+            let dedupedText = deduplicateText(lastChunk.text, chunk.text)
+            if dedupedText != chunk.text {
+                // Create a deduped version of the new chunk
+                let dedupedChunk = TranscriptionChunk(text: dedupedText, timestamp: chunk.timestamp)
+                transcriptionChunks.append(dedupedChunk)
+                print("Applied deduplication: '\(chunk.text)' -> '\(dedupedText)'")
+            } else {
+                transcriptionChunks.append(chunk)
+            }
+        } else {
+            transcriptionChunks.append(chunk)
         }
     }
     
