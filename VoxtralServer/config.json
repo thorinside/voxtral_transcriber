@@ -1,0 +1,36 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "workers": 1,
+    "reload": false,
+    "log_level": "info"
+  },
+  "model": {
+    "repo_id": "mistralai/Voxtral-Mini-3B-2507",
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "max_new_tokens": 500
+  },
+  "transcription": {
+    "default_language": "en",
+    "supported_languages": ["en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh"],
+    "timeout": 60
+  },
+  "performance": {
+    "batch_size": 1,
+    "gpu_memory_fraction": 0.9,
+    "enable_memory_optimization": true
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/voxtral_server.log",
+    "max_size": "10MB",
+    "backup_count": 5
+  },
+  "security": {
+    "cors_origins": ["*"],
+    "max_file_size": "50MB",
+    "allowed_formats": ["wav", "mp3", "flac"]
+  }
+}

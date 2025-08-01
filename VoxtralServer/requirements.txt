@@ -1,0 +1,38 @@
+# Voxtral Transcription Server Requirements
+# Install with: pip install -r requirements.txt
+
+# Core ML framework
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Hugging Face transformers for Voxtral model
+transformers>=4.40.0
+accelerate>=0.29.0
+
+# Web server framework
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+
+# Audio processing (optional, for additional audio format support)
+soundfile>=0.12.0
+librosa>=0.10.0
+
+# Additional utilities
+python-multipart>=0.0.6  # For file uploads
+requests>=2.31.0        # For HTTP requests
+
+# GPU support (CUDA 12.x for RTX 5090)
+# Note: Install the appropriate PyTorch version for your CUDA version
+# For CUDA 12.1 (recommended for RTX 5090):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Development dependencies (optional)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0  # For testing
+
+# Performance monitoring (optional)
+psutil>=5.9.0
+nvidia-ml-py3>=7.352.0  # For GPU monitoring
