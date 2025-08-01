@@ -4,10 +4,12 @@ A simple macOS application that captures audio from your microphone and sends it
 
 ## Features
 
-- **Microphone Capture**: Records audio from your macOS microphone
-- **Visual Feedback**: Shows microphone status with animated indicator
-- **Real-time Transcription**: Sends audio to Voxtral service and displays transcriptions
-- **Configurable Server**: Easy server URL configuration
+- **Real-time Audio Transcription**: Captures audio from your macOS microphone and sends it to a local Voxtral transcription service
+- **Visual Audio Level Indicators**: Shows real-time microphone activity and recording status
+- **Transcription History**: SQLite-based storage with full-text search capabilities
+- **System Tray Integration**: Operates from the menu bar with quick access to recording controls
+- **Configurable Server Settings**: Easy server URL configuration with connection testing
+- **Chunk-based Audio Processing**: Streams audio in chunks for continuous transcription
 - **Privacy-focused**: All processing happens locally on your machine
 
 ## Requirements
@@ -60,7 +62,10 @@ You can change this in the app's interface if your service is running on a diffe
 ### Using Command Line:
 
 ```bash
-# Build the project
+# Build and run using the provided script
+./build_and_run.sh
+
+# Manual build using xcodebuild
 xcodebuild -project VoxtralMini.xcodeproj -scheme VoxtralMini -configuration Debug build
 
 # Run the built app
@@ -89,11 +94,13 @@ Accept: application/json or text/plain
 
 1. **Launch the App**: Start VoxtralMini from your Applications folder or directly from Xcode
 2. **Grant Permission**: Allow microphone access when prompted
-3. **Configure Server**: Verify or update the server URL if needed
-4. **Start Recording**: Click the "Start Recording" button
-5. **Speak**: The microphone indicator will turn red and show activity
-6. **Stop Recording**: Click "Stop Recording" when finished
-7. **View Transcription**: The transcribed text will appear in the text area
+3. **Configure Server**: Verify or update the server URL in Settings if needed
+4. **System Tray Operation**: The app can operate from the menu bar for background transcription
+5. **Start Recording**: Click the "Start Recording" button or use the system tray controls
+6. **Speak**: The microphone indicator will show real-time audio levels during recording
+7. **Stop Recording**: Click "Stop Recording" when finished
+8. **View Transcription**: The transcribed text will appear in the main view and be saved to history
+9. **Search History**: Use the search functionality to find previous transcriptions
 
 ## Troubleshooting
 
@@ -122,10 +129,13 @@ If transcription quality is poor:
 
 ## Code Structure
 
-- `App.swift`: Main application entry point
-- `ContentView.swift`: Main UI with recording controls and transcription display
-- `AudioRecorder.swift`: Handles microphone capture and audio processing
-- `VoxtralService.swift`: Manages communication with the transcription service
+- `App.swift`: Main application entry point with `VoxtralMiniApp` struct and `AppDelegate` class
+- `ContentView.swift`: Primary UI with recording controls, transcription display, and history management
+- `AudioRecorder.swift`: Handles microphone capture using AVAudioEngine with real-time audio level monitoring
+- `VoxtralService.swift`: HTTP client for communicating with the local Voxtral transcription service
+- `DatabaseManager.swift`: SQLite-based persistence layer with full-text search capabilities
+- `SystemTrayManager.swift`: Manages system tray (menu bar) functionality and window management
+- `SettingsView.swift`: Configuration interface for server URL and connection testing
 
 ## Privacy
 

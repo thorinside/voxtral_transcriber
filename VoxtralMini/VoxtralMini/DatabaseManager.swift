@@ -37,6 +37,20 @@ struct AudioChunk {
         self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
     }
+    
+    init(id: String, filePath: String, timestamp: Date, status: AudioChunkStatus, retryCount: Int, lastRetryAt: Date?, transcriptionResult: String?, errorMessage: String?, createdAt: Date, sizeBytes: Int, durationSeconds: Double?) {
+        self.id = id
+        self.filePath = filePath
+        self.timestamp = timestamp
+        self.status = status
+        self.retryCount = retryCount
+        self.lastRetryAt = lastRetryAt
+        self.transcriptionResult = transcriptionResult
+        self.errorMessage = errorMessage
+        self.createdAt = createdAt
+        self.sizeBytes = sizeBytes
+        self.durationSeconds = durationSeconds
+    }
 }
 
 class DatabaseManager: ObservableObject {
@@ -65,6 +79,24 @@ class DatabaseManager: ObservableObject {
             print("Error opening database")
             return
         }
+        
+        // Create schema version table first
+        let createVersionTableQuery = """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY
+        );
+        """
+        
+        if sqlite3_exec(db, createVersionTableQuery, nil, nil, nil) != SQLITE_OK {
+            print("Error creating schema version table: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        
+        // Check current schema version
+        let currentVersion = getSchemaVersion()
+        print("Current database schema version: \(currentVersion)")
+        
+        // Run migrations if needed
+        migrateDatabase(from: currentVersion, to: 3) // Current target version is 3
         
         // Create transcriptions table if it doesn't exist
         let createTableQuery = """
@@ -342,6 +374,93 @@ class DatabaseManager: ObservableObject {
         return results
     }
     
+    // MARK: - Schema Migration Methods
+    
+    private func getSchemaVersion() -> Int {
+        let query = "SELECT version FROM schema_version LIMIT 1;"
+        var statement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) != SQLITE_OK {
+            // Table doesn't exist or other error, assume version 0
+            return 0
+        }
+        
+        var version = 0
+        if sqlite3_step(statement) == SQLITE_ROW {
+            version = Int(sqlite3_column_int(statement, 0))
+        }
+        
+        sqlite3_finalize(statement)
+        return version
+    }
+    
+    private func setSchemaVersion(_ version: Int) {
+        let query = "INSERT OR REPLACE INTO schema_version (version) VALUES (?);"
+        var statement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) != SQLITE_OK {
+            print("Error preparing version update statement: \(String(cString: sqlite3_errmsg(db)))")
+            return
+        }
+        
+        sqlite3_bind_int(statement, 1, Int32(version))
+        
+        if sqlite3_step(statement) != SQLITE_DONE {
+            print("Error updating schema version: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        
+        sqlite3_finalize(statement)
+    }
+    
+    private func migrateDatabase(from oldVersion: Int, to newVersion: Int) {
+        print("Migrating database from version \(oldVersion) to \(newVersion)")
+        
+        if oldVersion < 1 {
+            // Migration to version 1: Create initial tables (already handled above)
+            print("Migrating to version 1: Initial schema")
+        }
+        
+        if oldVersion < 2 {
+            // Migration to version 2: Create audio_chunks table and clean any invalid data
+            print("Migrating to version 2: Adding audio_chunks table")
+            
+            // Clean up any existing audio_chunks table that might have bad data
+            sqlite3_exec(db, "DROP TABLE IF EXISTS audio_chunks;", nil, nil, nil)
+            
+            // The audio_chunks table creation is handled in setupDatabase
+        }
+        
+        if oldVersion < 3 {
+            // Migration to version 3: Clean up any corrupted data
+            print("Migrating to version 3: Cleaning up corrupted data")
+            cleanupCorruptedChunkData()
+        }
+        
+        // Update schema version
+        setSchemaVersion(newVersion)
+        print("Database migration completed to version \(newVersion)")
+    }
+    
+    private func cleanupCorruptedChunkData() {
+        print("Cleaning up corrupted chunk data...")
+        
+        // Delete any records with empty or invalid status
+        let deleteQuery = """
+        DELETE FROM audio_chunks 
+        WHERE status = '' OR status IS NULL OR 
+              status NOT IN ('pending', 'processing', 'completed', 'failed');
+        """
+        
+        if sqlite3_exec(db, deleteQuery, nil, nil, nil) == SQLITE_OK {
+            let changes = sqlite3_changes(db)
+            if changes > 0 {
+                print("Deleted \(changes) corrupted chunk records")
+            }
+        } else {
+            print("Error cleaning up corrupted data: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+    
     deinit {
         sqlite3_close(db)
     }
@@ -366,7 +485,11 @@ class AudioChunkStore: ObservableObject {
     @Published var failedChunks: [AudioChunk] = []
     
     private var db: OpaquePointer? {
-        return DatabaseManager.shared.getDatabase()
+        let database = DatabaseManager.shared.getDatabase()
+        if database == nil {
+            print("Warning: Database connection is nil in AudioChunkStore")
+        }
+        return database
     }
     
     private let audioChunksDirectory: URL
@@ -397,9 +520,18 @@ class AudioChunkStore: ObservableObject {
         let fileName = "\(chunkId).wav"
         let filePath = audioChunksDirectory.appendingPathComponent(fileName)
         
+        print("Attempting to store audio chunk: \(chunkId)")
+        
+        // Check database connection first
+        guard db != nil else {
+            print("Database connection is nil, cannot store chunk")
+            return ""
+        }
+        
         do {
             // Write audio data to file
             try audioData.write(to: filePath)
+            print("Audio file written successfully: \(filePath.path)")
             
             // Save metadata to database
             let chunk = AudioChunk(
@@ -409,6 +541,8 @@ class AudioChunkStore: ObservableObject {
                 sizeBytes: audioData.count,
                 durationSeconds: estimatedDuration
             )
+            
+            print("Attempting to save chunk to database with status: \(chunk.status.rawValue)")
             
             if saveChunkToDatabase(chunk) {
                 print("Stored audio chunk: \(chunkId), size: \(audioData.count) bytes")
@@ -446,24 +580,24 @@ class AudioChunkStore: ObservableObject {
             return
         }
         
-        sqlite3_bind_text(statement, 1, status.rawValue, -1, nil)
+        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, nil)
         
         if let result = transcriptionResult {
-            sqlite3_bind_text(statement, 2, result, -1, nil)
+            sqlite3_bind_text(statement, 2, (result as NSString).utf8String, -1, nil)
         } else {
             sqlite3_bind_null(statement, 2)
         }
         
         if let error = errorMessage {
-            sqlite3_bind_text(statement, 3, error, -1, nil)
+            sqlite3_bind_text(statement, 3, (error as NSString).utf8String, -1, nil)
         } else {
             sqlite3_bind_null(statement, 3)
         }
         
-        sqlite3_bind_text(statement, 4, status.rawValue, -1, nil)
-        sqlite3_bind_text(statement, 5, status.rawValue, -1, nil)
+        sqlite3_bind_text(statement, 4, (status.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (status.rawValue as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 6, Date().timeIntervalSince1970)
-        sqlite3_bind_text(statement, 7, chunkId, -1, nil)
+        sqlite3_bind_text(statement, 7, (chunkId as NSString).utf8String, -1, nil)
         
         if sqlite3_step(statement) != SQLITE_DONE {
             print("Error updating chunk status: \(String(cString: sqlite3_errmsg(db)))")
@@ -504,7 +638,7 @@ class AudioChunkStore: ObservableObject {
             return
         }
         
-        sqlite3_bind_text(statement, 1, chunkId, -1, nil)
+        sqlite3_bind_text(statement, 1, (chunkId as NSString).utf8String, -1, nil)
         
         if sqlite3_step(statement) != SQLITE_DONE {
             print("Error deleting chunk: \(String(cString: sqlite3_errmsg(db)))")
@@ -564,6 +698,24 @@ class AudioChunkStore: ObservableObject {
     // MARK: - Private Methods
     
     private func saveChunkToDatabase(_ chunk: AudioChunk) -> Bool {
+        // First check if chunk already exists
+        let checkQuery = "SELECT COUNT(*) FROM audio_chunks WHERE id = ?;"
+        var checkStatement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, checkQuery, -1, &checkStatement, nil) == SQLITE_OK {
+            sqlite3_bind_text(checkStatement, 1, (chunk.id as NSString).utf8String, -1, nil)
+            
+            if sqlite3_step(checkStatement) == SQLITE_ROW {
+                let count = sqlite3_column_int(checkStatement, 0)
+                if count > 0 {
+                    print("Chunk \(chunk.id) already exists in database, skipping insert")
+                    sqlite3_finalize(checkStatement)
+                    return true // Consider it successful since it already exists
+                }
+            }
+            sqlite3_finalize(checkStatement)
+        }
+        
         let insertQuery = """
         INSERT INTO audio_chunks (id, file_path, timestamp, status, retry_count, 
                                  transcription_result, error_message, created_at, 
@@ -577,10 +729,10 @@ class AudioChunkStore: ObservableObject {
             return false
         }
         
-        sqlite3_bind_text(statement, 1, chunk.id, -1, nil)
-        sqlite3_bind_text(statement, 2, chunk.filePath, -1, nil)
+        sqlite3_bind_text(statement, 1, (chunk.id as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 2, (chunk.filePath as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 3, chunk.timestamp.timeIntervalSince1970)
-        sqlite3_bind_text(statement, 4, chunk.status.rawValue, -1, nil)
+        sqlite3_bind_text(statement, 4, (chunk.status.rawValue as NSString).utf8String, -1, nil)
         sqlite3_bind_int(statement, 5, Int32(chunk.retryCount))
         sqlite3_bind_null(statement, 6) // transcription_result
         sqlite3_bind_null(statement, 7) // error_message
@@ -594,12 +746,20 @@ class AudioChunkStore: ObservableObject {
         }
         
         let result = sqlite3_step(statement) == SQLITE_DONE
+        if !result {
+            print("Error inserting chunk into database: \(String(cString: sqlite3_errmsg(db)))")
+        }
         sqlite3_finalize(statement)
         
         return result
     }
     
     private func loadChunks() {
+        guard db != nil else {
+            print("Cannot load chunks: database connection is nil")
+            return
+        }
+        
         pendingChunks = loadChunksWithStatus(.pending)
         processingChunks = loadChunksWithStatus(.processing)
         failedChunks = loadChunksWithStatus(.failed)
@@ -618,7 +778,7 @@ class AudioChunkStore: ObservableObject {
             return []
         }
         
-        sqlite3_bind_text(statement, 1, status.rawValue, -1, nil)
+        sqlite3_bind_text(statement, 1, (status.rawValue as NSString).utf8String, -1, nil)
         
         var chunks: [AudioChunk] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -696,7 +856,8 @@ class AudioChunkStore: ObservableObject {
         }()
         
         guard let status = AudioChunkStatus(rawValue: statusString) else {
-            print("Unknown status: \(statusString)")
+            print("Unknown status: '\(statusString)' (length: \(statusString.count))")
+            print("Valid statuses are: \(AudioChunkStatus.allCases.map { $0.rawValue })")
             return nil
         }
         
@@ -704,6 +865,12 @@ class AudioChunkStore: ObservableObject {
             id: id,
             filePath: filePath,
             timestamp: timestamp,
+            status: status,
+            retryCount: retryCount,
+            lastRetryAt: lastRetryAt,
+            transcriptionResult: transcriptionResult,
+            errorMessage: errorMessage,
+            createdAt: createdAt,
             sizeBytes: sizeBytes,
             durationSeconds: durationSeconds
         )
