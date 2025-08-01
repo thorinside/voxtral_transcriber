@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2025 VoxtralMini Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+THIRD PARTY LICENSES
+
+This project uses the Voxtral-Mini-3B model from Mistral AI, which is distributed
+through Hugging Face under the Apache License 2.0:
+
+Model: mistralai/Voxtral-Mini-3B-2507
+Source: https://huggingface.co/mistralai/Voxtral-Mini-3B-2507
+License: Apache License 2.0
+
+The Voxtral-Mini-3B model is subject to its own licensing terms. Please refer to
+the model card on Hugging Face for complete licensing information and usage terms.
+
+Additional dependencies may have their own licenses. Please refer to the respective
+package documentation for complete licensing information:
+- PyTorch: BSD-style license
+- Transformers (Hugging Face): Apache License 2.0
+- FastAPI: MIT License
+- SwiftUI and AVFoundation: Apple Software License Agreement
