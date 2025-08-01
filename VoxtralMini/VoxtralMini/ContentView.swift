@@ -320,6 +320,9 @@ struct ContentView: View {
         .onAppear {
             audioRecorder.requestPermission()
             
+            // Set server URL for audio recorder
+            audioRecorder.setServerURL(serverURL)
+            
             // Set up the system tray manager with audio recorder and service
             systemTrayManager.setupAudioRecorder(audioRecorder)
             systemTrayManager.setupVoxtralService(voxtralService)
@@ -338,24 +341,9 @@ struct ContentView: View {
             // Clean up old completed chunks on startup
             audioChunkStore.cleanupCompletedChunks()
         }
-        .onChange(of: audioRecorder.audioData) { _, newData in
-            if newData != nil && isRecording {
-                // Send final audio data to transcription service
-                Task {
-                    await sendAudioForTranscription(newData!)
-                }
-            }
-        }
         .onChange(of: serverURL) { _, newURL in
+            audioRecorder.setServerURL(newURL)
             systemTrayManager.setServerURL(newURL)
-        }
-        .onChange(of: audioRecorder.audioChunk) { _, newChunk in
-            if newChunk != nil {
-                // Send audio chunk to transcription service (including final chunks when stopping)
-                Task {
-                    await sendAudioForTranscription(newChunk!, timestamp: audioRecorder.chunkTimestamp)
-                }
-            }
         }
     }
     
@@ -460,45 +448,7 @@ struct ContentView: View {
         }
     }
     
-    private func sendAudioForTranscription(_ audioData: Data, timestamp: Date? = nil) async {
-        print("Sending audio data for transcription. Size: \(audioData.count) bytes")
-        do {
-            let result = try await voxtralService.transcribe(audioData: audioData, serverURL: serverURL)
-            DispatchQueue.main.async {
-                if !result.isEmpty {
-                    print("Transcription received: \(result)")
-                    self.addTranscriptionChunk(result, timestamp: timestamp)
-                } else {
-                    print("Received empty transcription result")
-                }
-            }
-        } catch {
-            print("Transcription error: \(error)")
-            DispatchQueue.main.async {
-                self.addTranscriptionChunk("Error: \(error.localizedDescription)", timestamp: timestamp)
-            }
-        }
-    }
     
-    private func addTranscriptionChunk(_ text: String, timestamp: Date? = nil) {
-        let chunkTimestamp = timestamp ?? Date()
-        let newChunk = TranscriptionChunk(text: text, timestamp: chunkTimestamp)
-        
-        // Apply deduplication with the previous chunk
-        if let lastChunk = transcriptionChunks.last {
-            let dedupedText = deduplicateText(lastChunk.text, newChunk.text)
-            if dedupedText != newChunk.text {
-                // Create a deduped version of the new chunk
-                let dedupedChunk = TranscriptionChunk(text: dedupedText, timestamp: newChunk.timestamp)
-                transcriptionChunks.append(dedupedChunk)
-                print("Applied deduplication: '\(newChunk.text)' -> '\(dedupedText)'")
-            } else {
-                transcriptionChunks.append(newChunk)
-            }
-        } else {
-            transcriptionChunks.append(newChunk)
-        }
-    }
     
     private func deduplicateText(_ previousText: String, _ newText: String) -> String {
         let previousWords = previousText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }

@@ -12,6 +12,12 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var chunkTimestamp: Date? // Timestamp for when the chunk was recorded
     @Published var chunkId: String? // ID of the persisted chunk
     
+    private var serverURL = "http://dev.local:9090/transcribe"
+    
+    func setServerURL(_ url: String) {
+        serverURL = url
+    }
+    
     private var audioRecorder: AVAudioRecorder?
     private var timer: Timer?
     private var chunkTimer: Timer? // New timer for sending chunks
@@ -298,7 +304,6 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         let estimatedDuration = Double(overlappingChunk.count) / 44100.0
         
         // Enqueue chunk for persistent storage and transcription
-        let serverURL = "http://dev.local:9090/transcribe" // This should come from settings
         transcriptionQueue.enqueueChunk(
             audioData: wavData,
             timestamp: chunkTimestamp,
@@ -306,11 +311,8 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             estimatedDuration: estimatedDuration
         )
         
-        // Publish the chunk with its timestamp (for backward compatibility)
-        DispatchQueue.main.async {
-            self.audioChunk = wavData
-            self.chunkTimestamp = chunkTimestamp
-        }
+        // Note: We only use the persistent transcription queue now
+        // The old audioChunk publishing is removed to avoid dual transcription
         
         // Clear the chunk buffer
         chunkBuffer.removeAll()
@@ -332,7 +334,6 @@ class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         let estimatedDuration = Double(chunkBuffer.count) / 44100.0
         
         // Enqueue final chunk for persistent storage and transcription
-        let serverURL = "http://dev.local:9090/transcribe" // This should come from settings
         transcriptionQueue.enqueueChunk(
             audioData: wavData,
             timestamp: finalChunkTimestamp,
